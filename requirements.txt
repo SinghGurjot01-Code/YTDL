@@ -1,6 +1,5 @@
 Flask==2.3.3
 flask-cors==3.0.10
-yt-dlp==2025.10.18
+yt-dlp==2025.06.25
 Pillow==10.1.1
 gunicorn==21.2.0
-
