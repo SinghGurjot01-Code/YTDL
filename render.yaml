@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: ytdl-server
+    env: python
+    plan: free
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    autoDeploy: true
