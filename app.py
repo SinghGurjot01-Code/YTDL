@@ -7,20 +7,18 @@ import tempfile
 import threading
 import uuid
 import subprocess
-import shutil
-import time
 import logging
 import random
-from pathlib import Path
 from datetime import datetime, timedelta
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont
 import io
 import base64
 
 app = Flask(__name__)
 CORS(app)
 
-# Setup logging
+# Logging setup
+os.makedirs("logs", exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -47,7 +45,7 @@ class DownloadProgress:
         self.title = ''
         self.completed = False
 
-# --- Utility functions (duration, ffmpeg check, job access) ---
+# --- Utility functions ---
 def format_duration(seconds):
     try:
         seconds = int(seconds)
@@ -69,20 +67,16 @@ def check_ffmpeg():
 def safe_get_job(job_id):
     return download_status.get(job_id)
 
-# --- CAPTCHA generation & verification ---
+# --- CAPTCHA ---
 def generate_captcha_image(captcha_code):
-    try:
-        width, height = 220, 100
-        image = Image.new('RGB', (width, height), color=(255, 255, 255))
-        draw = ImageDraw.Draw(image)
-        font = ImageFont.load_default()
-        draw.text((10, 30), captcha_code, font=font, fill=(0,0,0))
-        img_byte_arr = io.BytesIO()
-        image.save(img_byte_arr, format='PNG', optimize=True)
-        return "data:image/png;base64," + base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
-    except Exception as e:
-        logger.error(f"Error generating CAPTCHA image: {e}")
-        return None
+    width, height = 220, 100
+    image = Image.new('RGB', (width, height), color=(255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    font = ImageFont.load_default()
+    draw.text((10, 30), captcha_code, font=font, fill=(0,0,0))
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format='PNG', optimize=True)
+    return "data:image/png;base64," + base64.b64encode(img_byte_arr.getvalue()).decode('utf-8')
 
 def cleanup_expired_captchas():
     now = datetime.now()
@@ -104,7 +98,6 @@ def download_worker(url, format_str, file_ext, job_id):
 
     ydl_opts = {
         'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
-        'progress_hooks': [],
         'quiet': True,
         'no_warnings': True,
         'nopart': False,
@@ -134,15 +127,14 @@ def download_worker(url, format_str, file_ext, job_id):
         job.completed = True
         logger.error("Download failed for job %s: %s", job_id, e)
 
-# --- API routes ---
+# --- Routes ---
 @app.route('/api/generate-captcha')
 def generate_captcha():
     captcha_code = str(random.randint(1000, 9999))
     captcha_id = str(uuid.uuid4())
     captcha_image = generate_captcha_image(captcha_code)
     captcha_store[captcha_id] = {'code': captcha_code, 'expires': datetime.now() + timedelta(minutes=5)}
-    response_data = {'captcha_id': captcha_id, 'captcha_code': captcha_code}
-    if captcha_image: response_data['captcha_image'] = captcha_image
+    response_data = {'captcha_id': captcha_id, 'captcha_code': captcha_code, 'captcha_image': captcha_image}
     return jsonify(response_data)
 
 @app.route('/api/verify-captcha', methods=['POST'])
@@ -169,11 +161,10 @@ def download_video():
     session_token = data.get('session_token')
     if not url or not format_str: return jsonify({'error': 'URL and format are required'}), 400
     if not session_token or session_token not in verified_sessions: return jsonify({'error': 'CAPTCHA verification required'}), 403
-    session_data = verified_sessions.pop(session_token)
+    verified_sessions.pop(session_token)
     job_id = str(uuid.uuid4())
     download_status[job_id] = DownloadProgress()
-    t = threading.Thread(target=download_worker, args=(url, format_str, file_ext, job_id), daemon=True)
-    t.start()
+    threading.Thread(target=download_worker, args=(url, format_str, file_ext, job_id), daemon=True).start()
     return jsonify({'job_id': job_id, 'ffmpeg_available': check_ffmpeg()})
 
 @app.route('/api/download-status/<job_id>')
@@ -193,3 +184,9 @@ def download_file(job_id):
 @app.route('/')
 def index():
     return render_template('index.html') if os.path.exists('templates/index.html') else "YTDL server running."
+
+# --- Run locally ---
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
